@@ -1,52 +1,40 @@
-import sha1 from "sha1";
-import { ObjectId } from "mongodb";
-import dbClient from "../utils/db";
+/* eslint-disable import/no-named-as-default */
+import sha1 from 'sha1';
+import Queue from 'bull/lib/queue';
+import dbClient from '../utils/db';
 
-const usersCollection = dbClient.db?.collection("users");
+const userQueue = new Queue('email sending');
 
-const postNew = async (req, res) => {
-  try {
-    const user = req.body;
+export default class UsersController {
+  static async postNew(req, res) {
+    const email = req.body ? req.body.email : null;
+    const password = req.body ? req.body.password : null;
 
-    // check if email is missing
-    if (!user.email) return res.status(400).json({ error: "Missing email" });
+    if (!email) {
+      res.status(400).json({ error: 'Missing email' });
+      return;
+    }
+    if (!password) {
+      res.status(400).json({ error: 'Missing password' });
+      return;
+    }
+    const user = await (await dbClient.usersCollection()).findOne({ email });
 
-    // check if password is missing
-    if (!user.password)
-      return res.status(400).json({ error: "Missing password" });
+    if (user) {
+      res.status(400).json({ error: 'Already exist' });
+      return;
+    }
+    const insertionInfo = await (await dbClient.usersCollection())
+      .insertOne({ email, password: sha1(password) });
+    const userId = insertionInfo.insertedId.toString();
 
-    // check if user with that email already exists in DB
-    const existingUser = await usersCollection.findOne({ email: user.email });
-    if (existingUser) return res.status(400).json({ error: "Already exists" });
-
-    // hash password
-    user.password = sha1(user.password);
-
-    // save the user in DB
-    const { ops } = await usersCollection.insertOne(user);
-    const { _id, email } = ops[0];
-
-    // return a response
-    return res.status(201).json({ id: _id, email });
-  } catch (error) {
-    console.log("Error:", error.message);
-    return res.status(500).json({ error: error.message });
+    userQueue.add({ userId });
+    res.status(201).json({ email, id: userId });
   }
-};
 
-const getMe = async (req, res) => {
-  try {
-    // check if user exists in DB
-    const user = await usersCollection.findOne({ _id: ObjectId(req.userId) });
+  static async getMe(req, res) {
+    const { user } = req;
 
-    if (!user) return res.status(401).json({ error: "Unauthorized" });
-
-    // return user
-    return res.status(200).json({ id: user._id, email: user.email });
-  } catch (error) {
-    console.log("Error:", error.message);
-    return res.status(500).json({ error: error.message });
+    res.status(200).json({ email: user.email, id: user._id.toString() });
   }
-};
-
-export default { postNew, getMe };
+}
